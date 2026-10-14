@@ -875,16 +875,52 @@ html[dir="rtl"] input,html[dir="rtl"] textarea,html[dir="rtl"] select{text-align
       setStatus('Signed out. This device still keeps its local data.');
     }
   }
+  function authText(en, ar){return document.documentElement.lang==='ar'?ar:en;}
+  function readableAuthError(error){
+    const message=String(error?.message||''); const lower=message.toLowerCase();
+    if(lower.includes('invalid login credentials'))return authText('Email or password is incorrect. If this is a new account, choose Create account first.','البريد الإلكتروني أو كلمة المرور غير صحيحة. لو ده حساب جديد، اختار إنشاء حساب الأول.');
+    if(lower.includes('user already registered')||lower.includes('already been registered'))return authText('This email is already registered. Sign in instead.','البريد ده مسجّل بالفعل. جرّب تسجيل الدخول بدل إنشاء حساب جديد.');
+    if(lower.includes('email not confirmed'))return authText('Confirm your email from the message we sent, then sign in.','أكّد بريدك الإلكتروني من الرسالة اللي اتبعتت لك، وبعدها سجّل الدخول.');
+    if(lower.includes('rate limit')||lower.includes('too many requests'))return authText('Too many attempts. Wait a few minutes and try again.','محاولات كثيرة في وقت قصير. استنى بضع دقائق وجرب تاني.');
+    if(lower.includes('failed to fetch')||lower.includes('network'))return authText('Could not reach the authentication service. Check your connection and retry.','مش قادر أوصل لخدمة الحسابات. اتأكد من الإنترنت وجرب تاني.');
+    if(lower.includes('redirect')||lower.includes('url not allowed')||lower.includes('not allowed'))return authText('The app URL may not be allowed in Supabase Auth URL Configuration. Add this site to the allowed Redirect URLs.','ممكن رابط التطبيق مش مضاف في إعدادات Supabase. أضف رابط الموقع ضمن Redirect URLs المسموح بها.');
+    return authText('Could not complete the request: ','تعذّر إكمال العملية: ')+message;
+  }
   async function runAuth(kind){
-    const email=document.getElementById('cloudEmail').value.trim(),password=document.getElementById('cloudPassword').value;
-    if(!email||password.length<8){setStatus('Enter your email and a password of at least 8 characters.');return;}
-    setStatus(kind==='signup'?'Creating account…':'Signing in…');
+    const emailEl=document.getElementById('cloudEmail'),passwordEl=document.getElementById('cloudPassword');
+    const email=emailEl.value.trim(),password=passwordEl.value;
+    const signIn=document.getElementById('cloudSignIn'),signUp=document.getElementById('cloudSignUp');
+    const gateError=document.getElementById('gateError');
+    if(!email||!emailEl.checkValidity()){
+      const msg=authText('Enter a valid email address.','اكتب بريد إلكتروني صحيح.');setStatus(msg);if(gateError)gateError.textContent=msg;emailEl.focus();return;
+    }
+    if(password.length<8){
+      const msg=authText('Password must be at least 8 characters.','كلمة المرور لازم تكون 8 أحرف على الأقل.');setStatus(msg);if(gateError)gateError.textContent=msg;passwordEl.focus();return;
+    }
+    signIn.disabled=true;signUp.disabled=true;
+    const oldIn=signIn.dataset.originalLabel||signIn.textContent,oldUp=signUp.dataset.originalLabel||signUp.textContent;
+    signIn.dataset.originalLabel=oldIn;signUp.dataset.originalLabel=oldUp;
+    if(kind==='signup')signUp.textContent=authText('Creating account…','جارٍ إنشاء الحساب…');else signIn.textContent=authText('Signing in…','جارٍ تسجيل الدخول…');
+    const pending=kind==='signup'?authText('Creating your account. Please wait…','جارٍ إنشاء حسابك، انتظر من فضلك…'):authText('Signing you in. Please wait…','جارٍ تسجيل الدخول، انتظر من فضلك…');
+    setStatus(pending);if(gateError)gateError.textContent=pending;
     try{
-      const result=kind==='signup'?await client.auth.signUp({email,password}):await client.auth.signInWithPassword({email,password});
+      let result;
+      if(kind==='signup'){
+        const emailRedirectTo=window.location.origin+window.location.pathname;
+        result=await client.auth.signUp({email,password,options:{emailRedirectTo}});
+      }else result=await client.auth.signInWithPassword({email,password});
       if(result.error)throw result.error;
-      if(kind==='signup'&&!result.data.session){setStatus('Account created. Confirm your email, then sign in.');const gateError=document.getElementById('gateError');if(gateError)gateError.textContent='Account created. Confirm your email, then sign in.';return;}
+      if(kind==='signup'){
+        if(Array.isArray(result.data.user?.identities)&&result.data.user.identities.length===0){
+          const msg=authText('This email may already have an account. Try signing in instead.','غالبًا البريد ده عليه حساب بالفعل. جرّب تسجيل الدخول بدل إنشاء حساب جديد.');setStatus(msg);if(gateError)gateError.textContent=msg;return;
+        }
+        if(!result.data.session){
+          const msg=authText('Account request received. Check your inbox and spam folder for the confirmation email, then open its link to activate your account.','تم استلام طلب إنشاء الحساب. راجع البريد الوارد ومجلد الرسائل غير المرغوب فيها، وافتح رابط التأكيد لتفعيل الحساب.');setStatus(msg);if(gateError)gateError.textContent=msg;return;
+        }
+      }
       showAuth(result.data.user||result.data.session?.user);
-    }catch(e){const message='Authentication failed: '+(e.message||'unknown error');setStatus(message);const gateError=document.getElementById('gateError');if(gateError)gateError.textContent=message;}
+    }catch(e){const message=readableAuthError(e);setStatus(message);if(gateError)gateError.textContent=message;}
+    finally{signIn.disabled=false;signUp.disabled=false;signIn.textContent=oldIn;signUp.textContent=oldUp;}
   }
   document.getElementById('cloudSignIn').addEventListener('click',()=>runAuth('signin'));
   document.getElementById('cloudSignUp').addEventListener('click',()=>runAuth('signup'));
@@ -1059,4 +1095,5 @@ html[dir="rtl"] #appSidebar .nav{text-align:right!important}
  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeDrawer()},true);
  sidebar.addEventListener('click',function(e){if(e.target.closest('.nav'))setTimeout(closeDrawer,0)},true);
 })();
-</script
+</script>
+
