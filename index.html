@@ -136,6 +136,112 @@ button{transition:transform .16s,filter .16s,box-shadow .16s}button:hover{filter
 @media(max-width:600px){.app-header{min-height:62px}.brand h1{font-size:17px}.brand h1 small,.brand p{display:none}.layout{display:block;padding:10px 10px 90px}.sidebar{position:fixed;top:auto;bottom:8px;left:8px;right:8px;width:auto;max-height:none;height:67px;overflow-x:auto;overflow-y:hidden;display:flex;flex-direction:row;justify-content:space-around;gap:4px;padding:5px;background:rgba(8,13,18,.96);backdrop-filter:blur(18px);border-radius:18px;box-shadow:0 8px 32px #000c;border-color:#2a4048}.sidebar .nav{flex:1 0 49px;width:auto;min-width:49px;min-height:52px;padding:4px 2px;font-size:9px}.sidebar .nav span{font-size:17px}.sidebar .drawer-head,.sidebar .side-note{display:none}.welcome{padding:15px;margin-bottom:10px}.welcome h2{font-size:25px}.hero-banner{min-height:205px;padding:18px;background-position:61% center;border-radius:17px}.hero-banner:before{content:'';position:absolute;inset:0;background:linear-gradient(90deg,#071013f5 0%,#071013dd 42%,#07101340 100%);z-index:0}.hero-copy{max-width:85%;z-index:1}.hero-copy h2{font-size:27px}.hero-copy p{font-size:13px;max-width:240px}.hero-chips{gap:5px;flex-wrap:wrap}.hero-chips span{font-size:9px;padding:5px 7px}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.grid>.span-12,.grid>.span-7,.grid>.span-6,.grid>.span-5,.grid>.span-4{grid-column:span 2!important}.grid>.span-3{grid-column:span 1!important}.card{padding:13px;border-radius:15px}.metric{font-size:25px}.sectionhead h3{font-size:15px}.gate-shell{display:flex!important;flex-direction:column!important;width:min(100%,470px)!important;margin:12px auto!important}.gate-art{min-height:290px!important;max-height:330px!important;order:0!important;background-position:center 35%!important}.gate-form-wrap{order:1!important;padding:24px 20px!important}.gate-quote h2{font-size:28px!important}.gate-signature{font-size:42px!important}.gate-floating{display:none!important}.gate-mobile-brand{display:flex!important}.gate-form-wrap h1{font-size:34px!important}.gate-form-wrap .gate-sub{margin-bottom:20px!important}.page .grid{gap:9px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 </style>
+
+<style id="dayone-navigation-fix">
+/* Reliable navigation layout on desktop and mobile */
+html, body { min-height:100%; }
+body { overflow-x:hidden; }
+.app-header { z-index:80; }
+.layout { grid-template-columns:76px minmax(0,1fr); }
+#appSidebar {
+  transform:none !important;
+  position:sticky;
+  top:88px;
+  left:auto;
+  bottom:auto;
+  width:76px;
+  max-height:calc(100vh - 105px);
+  overflow-y:auto;
+  display:flex;
+  flex-direction:column;
+  z-index:35;
+}
+#appSidebar .nav { flex-shrink:0; }
+#drawerScrim { display:none; }
+#menuClose { display:none; }
+.page { display:none; }
+.page.active { display:block; }
+@media (max-width:800px) {
+  .layout { display:block; padding:8px 12px 95px; }
+  #appSidebar {
+    position:fixed !important;
+    top:0 !important; left:0 !important; bottom:0 !important;
+    width:min(300px,86vw) !important;
+    max-height:100dvh !important;
+    height:100dvh;
+    overflow-y:auto;
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    padding:18px 14px calc(24px + env(safe-area-inset-bottom));
+    border-radius:0 22px 22px 0;
+    transform:translateX(-110%) !important;
+    z-index:100;
+    background:linear-gradient(180deg,#0a0d12f7,#050609f7);
+    box-shadow:25px 0 80px #0009;
+    overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
+  }
+  #appSidebar.open { transform:translateX(0) !important; }
+  #appSidebar .nav {
+    width:100%; min-height:54px; flex-direction:row;
+    justify-content:flex-start; gap:12px; padding:12px;
+    font-size:14px; text-align:left;
+  }
+  #appSidebar .nav span { width:28px; font-size:19px; }
+  #appSidebar .drawer-head { display:flex; }
+  #appSidebar .side-note { display:block; }
+  #menuClose { display:inline-flex; align-items:center; justify-content:center; }
+  #drawerScrim { display:block; z-index:95; }
+  #drawerScrim.open { visibility:visible; opacity:1; }
+  .app-header { position:sticky; top:0; }
+  main { width:100%; min-width:0; }
+}
+@media (prefers-reduced-motion:reduce) {
+  #appSidebar, #drawerScrim { transition:none !important; }
+}
+</style>
+<script id="dayone-navigation-safety">
+(function(){
+  const sidebar=document.getElementById('appSidebar');
+  const scrim=document.getElementById('drawerScrim');
+  const toggle=document.getElementById('menuToggle');
+  const close=document.getElementById('menuClose');
+  if(!sidebar||!scrim||!toggle||!close)return;
+  function closeNav(){
+    sidebar.classList.remove('open');
+    scrim.classList.remove('open');
+    toggle.setAttribute('aria-expanded','false');
+  }
+  function openNav(){
+    sidebar.classList.add('open');
+    scrim.classList.add('open');
+    toggle.setAttribute('aria-expanded','true');
+  }
+  toggle.addEventListener('click',function(e){
+    e.preventDefault();
+    sidebar.classList.contains('open')?closeNav():openNav();
+  });
+  close.addEventListener('click',closeNav);
+  scrim.addEventListener('click',closeNav);
+  sidebar.querySelectorAll('button.nav[data-page]').forEach(function(button){
+    button.addEventListener('click',function(){
+      const target=document.getElementById('page-'+button.dataset.page);
+      if(!target)return;
+      document.querySelectorAll('main .page').forEach(function(page){
+        page.classList.toggle('active',page===target);
+      });
+      document.querySelectorAll('#appSidebar .nav[data-page]').forEach(function(nav){
+        nav.classList.toggle('active',nav===button);
+      });
+      closeNav();
+      window.scrollTo({top:0,behavior:'auto'});
+    });
+  });
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeNav();});
+})();
+</script>
+
 </head>
 <body>
 <div id="welcomeGate" class="welcome-gate" aria-label="DayOne sign in">
@@ -797,5 +903,3 @@ html[dir="rtl"] input,html[dir="rtl"] textarea,html[dir="rtl"] select{text-align
   client.auth.onAuthStateChange((_event,session)=>showAuth(session?.user||null));
 })();
 </script>
-
-</body>
