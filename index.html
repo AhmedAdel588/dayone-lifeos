@@ -217,11 +217,11 @@ body{background-color:#030303;background-image:radial-gradient(ellipse at 10% 8%
   <div class="card span-6"><h3>Daily targets</h3><label class="sub">Water target (litres)</label><div class="formrow"><input id="settingWater" type="number" step=".25" min=".5" max="8"><button onclick="saveSettings()">Save targets</button></div><p class="sub">Hydration needs vary with body size, climate, diet, activity and medical conditions. Use this as a configurable reminder target, not a medical prescription.</p></div>
   <div class="card span-6"><h3>Daily routine</h3><p class="sub">Starter routine — edit the times to match your actual day.</p><div id="routineSettings" class="stack"></div><button class="secondary" style="margin-top:12px" onclick="editRoutine()">Edit routine times</button></div>
   <div class="card span-6"><h3>Notifications</h3><p class="sub">This web prototype can save your schedule, but reliable reminders while the browser is closed need browser permission and additional notification/PWA setup.</p><button onclick="requestNotifications()">Enable browser notifications</button><div id="notificationStatus" class="sub" style="margin-top:8px"></div></div>
-  <div class="card span-6"><h3>Backup & privacy</h3><p class="sub">Records are stored locally in this browser on this device. They are not automatically synced to another phone.</p><div class="formrow"><button onclick="exportData()">Export backup</button><button class="secondary" onclick="exportCSV()">Export logs CSV</button><label class="secondary" style="padding:10px 12px;border-radius:10px;cursor:pointer">Import backup<input id="importFile" type="file" accept="application/json" style="display:none" onchange="importData(event)"></label></div><button class="secondary danger" onclick="resetData()">Reset all data</button></div>
+  <div class="card span-6"><h3>Backup & privacy</h3><p class="sub">Records are saved locally and automatically synced to your private account when signed in.</p><div class="formrow"><button onclick="exportData()">Export backup</button><button class="secondary" onclick="exportCSV()">Export logs CSV</button><label class="secondary" style="padding:10px 12px;border-radius:10px;cursor:pointer">Import backup<input id="importFile" type="file" accept="application/json" style="display:none" onchange="importData(event)"></label></div><button class="secondary danger" onclick="resetData()">Reset all data</button></div>
  </div>
   <div class="card span-12" id="cloudSyncCard">
     <h3>Cloud sync across devices</h3>
-    <p class="sub">Create an account or sign in to sync your DayOne records between your laptop and phone. Your current browser data stays local until you choose how to transfer it.</p>
+    <p class="sub">Create an account or sign in to sync your DayOne records between your laptop and phone. After you sign in, DayOne automatically initializes cloud sync and keeps this device updated.</p>
     <div id="cloudAuthForm">
       <div class="formrow"><input id="cloudEmail" type="email" autocomplete="email" placeholder="Email address"><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password (at least 8 characters)"></div>
       <div class="formrow"><button type="button" id="cloudSignIn">Sign in</button><button type="button" class="secondary" id="cloudSignUp">Create account</button></div>
@@ -584,84 +584,139 @@ html[dir="rtl"] input,html[dir="rtl"] textarea,html[dir="rtl"] select{text-align
   const SUPABASE_URL = 'https://oxfuowpihxhlzamwcvbm.supabase.co';
   const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_j9zpuqN6Lp2728iezNlktA_OQilV0ed';
   const statusEl = document.getElementById('cloudStatus');
-  if (!window.supabase || !window.supabase.createClient) { statusEl.textContent = 'Could not load the Supabase client. Check your internet connection and reload.'; return; }
+  if (!window.supabase || !window.supabase.createClient) { statusEl.textContent = 'Supabase client could not load. Check internet and reload.'; return; }
   const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
-  let currentUser = null, pushTimer = null, busy = false;
-  const syncKey = () => currentUser ? 'dayoneCloudSyncEnabled:' + currentUser.id : '';
-  const isSyncEnabled = () => !!syncKey() && localStorage.getItem(syncKey()) === 'true';
-  const setStatus = (s) => { statusEl.textContent = s; };
-  const localData = () => { try { return JSON.parse(localStorage.getItem('dayoneData') || '{}'); } catch (_) { return {}; } };
-  function backupLocalDownload(){
-    const blob = new Blob([JSON.stringify(localData(), null, 2)], {type:'application/json'});
-    const url = URL.createObjectURL(blob); const a = document.createElement('a');
-    a.href=url; a.download='dayone-local-backup-before-cloud-'+new Date().toISOString().slice(0,10)+'.json';
-    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  let currentUser=null, pushTimer=null, pollTimer=null, busy=false, applyingCloud=false, lastCloudUpdated='';
+  const syncKey=()=>currentUser?'dayoneCloudSyncEnabled:'+currentUser.id:'';
+  const deviceKey=()=>currentUser?'dayoneCloudDeviceInitialized:'+currentUser.id:'';
+  const isSyncEnabled=()=>!!syncKey()&&localStorage.getItem(syncKey())==='true';
+  const setStatus=(s)=>{statusEl.textContent=s;};
+  const localData=()=>{try{return JSON.parse(localStorage.getItem('dayoneData')||'{}')}catch(_){return {}}};
+  function downloadBackup(){
+    const blob=new Blob([JSON.stringify(localData(),null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='dayone-backup-before-sync-'+new Date().toISOString().slice(0,10)+'.json';
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1200);
   }
   async function fetchCloud(){
-    if(!currentUser) throw new Error('Please sign in first.');
-    const {data:row,error} = await client.from('dayone_user_data').select('payload,updated_at').eq('user_id',currentUser.id).maybeSingle();
-    if(error) throw error; return row;
+    if(!currentUser)throw new Error('Sign in first.');
+    const {data:row,error}=await client.from('dayone_user_data').select('payload,updated_at').eq('user_id',currentUser.id).maybeSingle();
+    if(error)throw error;return row;
   }
-  async function pushData(payload, announce=true){
-    if(!currentUser) throw new Error('Please sign in first.');
-    const {error} = await client.from('dayone_user_data').upsert({user_id:currentUser.id,payload:payload,updated_at:new Date().toISOString()},{onConflict:'user_id'});
-    if(error) throw error;
-    if(announce) setStatus('Upload complete. Your data is saved to your account.');
+  async function pushData(payload,announce=false){
+    if(!currentUser)throw new Error('Sign in first.');
+    const stamp=new Date().toISOString();
+    const {error}=await client.from('dayone_user_data').upsert({user_id:currentUser.id,payload,updated_at:stamp},{onConflict:'user_id'});
+    if(error)throw error;
+    lastCloudUpdated=stamp;
+    if(announce)setStatus('☁️ Synced · '+new Date().toLocaleTimeString());
   }
-  window.dayoneCloudPush = function(payload){
-    if(!currentUser || !isSyncEnabled()) return;
+  function applyCloud(payload){
+    applyingCloud=true;
+    try{
+      localStorage.setItem('dayoneData',JSON.stringify(payload||{}));
+      if(typeof data!=='undefined'){data=JSON.parse(JSON.stringify(payload||{}));if(typeof ensure==='function')ensure();if(typeof renderAll==='function')renderAll();}
+    }finally{setTimeout(()=>{applyingCloud=false},250);}
+  }
+  async function syncFromCloud(){
+    if(!currentUser||!isSyncEnabled()||busy||document.hidden)return;
+    try{
+      const row=await fetchCloud();
+      if(!row)return;
+      if(row.updated_at && row.updated_at!==lastCloudUpdated){
+        const localStamp=localStorage.getItem('dayoneCloudLastSeen:'+currentUser.id)||'';
+        if(row.updated_at!==localStamp){
+          lastCloudUpdated=row.updated_at;
+          applyCloud(row.payload);
+          localStorage.setItem('dayoneCloudLastSeen:'+currentUser.id,row.updated_at);
+          setStatus('☁️ Latest changes received · '+new Date().toLocaleTimeString());
+        }
+      }
+    }catch(e){setStatus('Sync waiting for connection: '+(e.message||'network error'));}
+  }
+  window.dayoneCloudPush=function(payload){
+    if(!currentUser||!isSyncEnabled()||applyingCloud)return;
     clearTimeout(pushTimer);
-    pushTimer=setTimeout(async()=>{ if(busy)return; try{await pushData(payload,false);setStatus('Automatic sync complete · '+new Date().toLocaleTimeString());}catch(e){setStatus('Automatic sync failed: '+(e.message||'check connection and database policies'));}},900);
+    pushTimer=setTimeout(async()=>{
+      if(busy||applyingCloud)return;
+      try{await pushData(payload,true);localStorage.setItem('dayoneCloudLastSeen:'+currentUser.id,lastCloudUpdated);}
+      catch(e){setStatus('Auto-sync failed: '+(e.message||'check database setup and connection'));}
+    },700);
   };
+  async function startAutomaticSync(){
+    if(!currentUser)return;
+    busy=true;
+    try{
+      const row=await fetchCloud();
+      const initialized=localStorage.getItem(deviceKey())==='true';
+      if(!initialized){
+        if(row){
+          // First sign-in on a device: preserve its existing local records as a backup, then use the cloud copy.
+          const local=localData();
+          if(Object.keys(local).length)downloadBackup();
+          applyCloud(row.payload);
+          lastCloudUpdated=row.updated_at||'';
+          localStorage.setItem('dayoneCloudLastSeen:'+currentUser.id,lastCloudUpdated);
+        }else{
+          // First device creates the initial cloud copy from its existing records.
+          await pushData(localData(),false);
+          localStorage.setItem('dayoneCloudLastSeen:'+currentUser.id,lastCloudUpdated);
+        }
+        localStorage.setItem(deviceKey(),'true');
+      }
+      localStorage.setItem(syncKey(),'true');
+      setStatus('✓ Automatic sync is ON · changes sync between your devices.');
+    }catch(e){setStatus('Could not start automatic sync: '+(e.message||'apply the SQL setup first'));}
+    finally{busy=false;startPolling();}
+  }
+  function startPolling(){
+    clearInterval(pollTimer);
+    if(currentUser&&isSyncEnabled())pollTimer=setInterval(syncFromCloud,4000);
+  }
   function showAuth(user){
+    const changed=currentUser?.id!==(user?.id||null);
     currentUser=user||null;
+    if(changed){clearInterval(pollTimer);clearTimeout(pushTimer);lastCloudUpdated='';}
     document.getElementById('cloudAuthForm').style.display=user?'none':'block';
     document.getElementById('cloudSignedIn').style.display=user?'block':'none';
     document.getElementById('cloudUserEmail').textContent=user?.email||'';
-    if(user){setStatus('Signed in. Choose whether to upload this device’s data or download the cloud copy before enabling automatic sync.');}
-    else setStatus('Signed out. Your local browser data has not been changed.');
+    const upload=document.getElementById('cloudUpload'),download=document.getElementById('cloudDownload');
+    const enable=document.getElementById('cloudEnableSync'),disable=document.getElementById('cloudDisableSync');
+    if(user){
+      if(upload)upload.style.display='none'; if(download)download.style.display='none';
+      if(enable)enable.style.display='none'; if(disable)disable.style.display='inline-block';
+      if(changed)startAutomaticSync();
+      else if(isSyncEnabled()){setStatus('✓ Automatic sync is ON.');startPolling();}
+    }else{
+      if(upload)upload.style.display='none';if(download)download.style.display='none';
+      if(enable)enable.style.display='none';if(disable)disable.style.display='none';
+      setStatus('Signed out. This device still keeps its local data.');
+    }
   }
   async function runAuth(kind){
-    const email=document.getElementById('cloudEmail').value.trim();
-    const password=document.getElementById('cloudPassword').value;
-    if(!email||password.length<8){setStatus('Enter a valid email and a password of at least 8 characters.');return;}
+    const email=document.getElementById('cloudEmail').value.trim(),password=document.getElementById('cloudPassword').value;
+    if(!email||password.length<8){setStatus('Enter your email and a password of at least 8 characters.');return;}
     setStatus(kind==='signup'?'Creating account…':'Signing in…');
     try{
-      const result=kind==='signup' ? await client.auth.signUp({email,password}) : await client.auth.signInWithPassword({email,password});
-      if(result.error) throw result.error;
-      if(kind==='signup' && !result.data.session){setStatus('Account created. Check your email to confirm the account, then sign in here.');return;}
-      showAuth(result.data.user || result.data.session?.user);
+      const result=kind==='signup'?await client.auth.signUp({email,password}):await client.auth.signInWithPassword({email,password});
+      if(result.error)throw result.error;
+      if(kind==='signup'&&!result.data.session){setStatus('Account created. Confirm your email, then sign in.');return;}
+      showAuth(result.data.user||result.data.session?.user);
     }catch(e){setStatus('Authentication failed: '+(e.message||'unknown error'));}
   }
   document.getElementById('cloudSignIn').addEventListener('click',()=>runAuth('signin'));
   document.getElementById('cloudSignUp').addEventListener('click',()=>runAuth('signup'));
-  document.getElementById('cloudUpload').addEventListener('click',async()=>{
-    if(!confirm('Upload this browser’s current DayOne data to your account? This replaces the cloud copy. Export a backup first if needed.'))return;
-    busy=true;setStatus('Uploading this device’s data…');
-    try{await pushData(localData());localStorage.setItem(syncKey(),'true');setStatus('Uploaded successfully. Automatic sync is enabled on this device.');}
-    catch(e){setStatus('Upload failed: '+(e.message||'check that the SQL setup has been applied'));}finally{busy=false;}
-  });
-  document.getElementById('cloudDownload').addEventListener('click',async()=>{
-    if(!confirm('Before downloading, DayOne will download a backup of this device’s current data. Then it will replace this browser’s data with the cloud copy. Continue?'))return;
-    busy=true;setStatus('Checking cloud data…');
-    try{
-      const row=await fetchCloud(); if(!row){setStatus('No cloud data exists yet. Use “Upload this device’s data” first on the device that has your records.');return;}
-      backupLocalDownload();
-      localStorage.setItem('dayoneData',JSON.stringify(row.payload||{}));
-      data=JSON.parse(JSON.stringify(row.payload||{})); ensure(); renderAll();
-      localStorage.setItem(syncKey(),'true');
-      setStatus('Cloud data downloaded. A backup of the previous local data was downloaded too. Automatic sync is enabled.');
-    }catch(e){setStatus('Download failed: '+(e.message||'check that the SQL setup has been applied'));}finally{busy=false;}
-  });
-  document.getElementById('cloudEnableSync').addEventListener('click',async()=>{
-    if(!currentUser)return;
-    try{const row=await fetchCloud();if(!row){setStatus('No cloud copy exists. Upload this device’s data first, then enable sync.');return;}
-      if(!confirm('Enable automatic sync on this device? Future changes will update the cloud copy for this account. Use Download first if the cloud copy should be the source of truth.'))return;
-      localStorage.setItem(syncKey(),'true');setStatus('Automatic sync enabled on this device.');
-    }catch(e){setStatus('Could not enable sync: '+(e.message||'unknown error'));}
-  });
-  document.getElementById('cloudDisableSync').addEventListener('click',()=>{if(syncKey())localStorage.removeItem(syncKey());clearTimeout(pushTimer);setStatus('Automatic sync paused on this device. Local saving continues.');});
-  document.getElementById('cloudSignOut').addEventListener('click',async()=>{if(syncKey())localStorage.removeItem(syncKey());await client.auth.signOut();showAuth(null);});
+  // Keep old buttons safe if this HTML is opened from a cached version.
+  const uploadBtn=document.getElementById('cloudUpload');
+  if(uploadBtn)uploadBtn.addEventListener('click',async()=>{if(!currentUser)return;try{await pushData(localData(),true);localStorage.setItem(syncKey(),'true');localStorage.setItem(deviceKey(),'true');startPolling();}catch(e){setStatus('Sync failed: '+e.message)}});
+  const downloadBtn=document.getElementById('cloudDownload');
+  if(downloadBtn)downloadBtn.addEventListener('click',async()=>{try{const row=await fetchCloud();if(!row){setStatus('No cloud data exists yet.');return;}downloadBackup();applyCloud(row.payload);localStorage.setItem(syncKey(),'true');localStorage.setItem(deviceKey(),'true');lastCloudUpdated=row.updated_at||'';localStorage.setItem('dayoneCloudLastSeen:'+currentUser.id,lastCloudUpdated);startPolling();setStatus('Cloud data applied and automatic sync enabled.');}catch(e){setStatus('Download failed: '+e.message)}});
+  const enableBtn=document.getElementById('cloudEnableSync');
+  if(enableBtn)enableBtn.addEventListener('click',startAutomaticSync);
+  const disableBtn=document.getElementById('cloudDisableSync');
+  if(disableBtn)disableBtn.addEventListener('click',()=>{if(syncKey())localStorage.removeItem(syncKey());clearInterval(pollTimer);clearTimeout(pushTimer);setStatus('Automatic sync paused. Local saving continues.')});
+  document.getElementById('cloudSignOut').addEventListener('click',async()=>{clearInterval(pollTimer);clearTimeout(pushTimer);await client.auth.signOut();showAuth(null);});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncFromCloud()});
   client.auth.getSession().then(({data,error})=>{if(error){setStatus('Could not restore sign-in: '+error.message);return;}showAuth(data.session?.user||null);});
   client.auth.onAuthStateChange((_event,session)=>showAuth(session?.user||null));
 })();
